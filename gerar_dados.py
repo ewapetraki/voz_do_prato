@@ -113,7 +113,7 @@ def main(seed=7):
         if (u, rid, d) in vistos:
             continue
         vistos.add((u, rid, d))
-        nota = min(5, max(0.5, round(random.gauss(MEDIA[rid], 0.9) * 2) / 2))
+        nota = min(5, max(1, round(random.gauss(MEDIA[rid], 0.9))))   # estrelas inteiras: 1 a 5
         if nota >= 4:
             com, tags = random.choice(COM_POS), random.sample(TAGS_POS, 2)
         elif nota >= 3:
@@ -149,8 +149,16 @@ def main(seed=7):
     _salvar("resgates.csv", resg, ["usuario", "codigo", "data"])
 
     _salvar("querer_ir.csv", [], ["usuario", "restaurante_id"])
+    _salvar("likes.csv", [], ["usuario", "avaliacao_id"])
     _salvar("kpi_base.csv", [(48200, "Circuito")], ["impressoes", "fase"])  # alcance SIMULADO
     print("Dados gerados.")
+
+
+def garantir():
+    """Cria arquivos opcionais que não existiam em versões antigas dos dados (sem apagar nada)."""
+    import os
+    if not os.path.exists("likes.csv"):
+        _salvar("likes.csv", [], ["usuario", "avaliacao_id"])
 
 
 def adicionar(arquivo, linha):

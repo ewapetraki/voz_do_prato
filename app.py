@@ -14,14 +14,15 @@ import pandas as pd
 import streamlit as st
 
 import gerar_dados as gd
-from backend import (HOJE, cfg, evento, horario, kpis, ler, notificacoes, ranking_criticos,
-                     selos_de, stats)
+from backend import (HOJE, cfg, decodificar_qr, evento, horario, kpis, ler, notificacoes,
+                     ranking_criticos, selos_de, stats)
 
 st.set_page_config(page_title="Voz do Prato", page_icon="🍽️", layout="centered",
                    initial_sidebar_state="collapsed")
 
 if not (os.path.exists("pratos.csv") and os.path.exists("eventos.csv")):
     gd.main()
+gd.garantir()
 
 esc = html.escape
 ss = st.session_state
@@ -33,7 +34,10 @@ st.markdown("""<style>
 header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stSidebar"],
 [data-testid="stSidebarCollapsedControl"], [data-testid="stExpandSidebarButton"],
 #MainMenu, footer {display:none !important}
-.block-container{max-width:480px;padding:calc(3.8rem + env(safe-area-inset-top)) 1rem 6rem 1rem}
+.stMainBlockContainer{max-width:480px;padding:calc(1rem + env(safe-area-inset-top)) 1rem 5rem 1rem !important}
+.stMainBlockContainer:has(.st-key-barra){padding-top:calc(3.6rem + env(safe-area-inset-top)) !important}
+.stElementContainer:has(style){display:none !important}   /* blocos de CSS não ocupam espaço */
+.stMainBlockContainer h4, .stMainBlockContainer h5{padding-top:.2rem !important}
 .card{background:#1e232a;border:1px solid #2e353f;border-radius:12px;padding:12px 14px;margin:0 0 10px 0;
       line-height:1.4}
 .hero{border-radius:14px;padding:20px 14px;text-align:center;margin-bottom:12px;color:#fff}
@@ -61,12 +65,18 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stSideb
 .hrl b{color:#ffb400}
 .hrb{background:#2e353f;border-radius:6px;height:10px;overflow:hidden}
 .hrb div{background:#d6203a;height:10px;border-radius:6px}
-.st-key-barra{position:fixed;bottom:0;left:0;right:0;z-index:999;background:#15181d;
-              border-top:1px solid #2e353f;padding:4px 8px calc(4px + env(safe-area-inset-bottom))}
-.st-key-barra [role=radiogroup]{display:flex;justify-content:space-around;width:100%;max-width:480px;margin:0 auto}
-.st-key-barra label{padding:6px 14px;border-radius:12px;cursor:pointer;font-size:24px;margin:0}
-.st-key-barra label>div:first-child{display:none}
-.st-key-barra label:has(input:checked){background:#d6203a}
+/* abas no topo: uma linha, alinhadas, longe do selo do Streamlit (canto inferior direito) */
+.st-key-barra{position:fixed;top:0;left:0;right:0;z-index:999;background:#15181d;
+              border-bottom:1px solid #2e353f;padding:calc(6px + env(safe-area-inset-top)) 8px 6px 8px}
+.st-key-barra .stElementContainer{width:100% !important}
+.st-key-barra [data-testid="stWidgetLabel"]{display:none}
+.st-key-barra [data-testid="stRadioGroup"]{display:flex;flex-wrap:nowrap;gap:4px;width:100%;max-width:480px;margin:0 auto}
+.st-key-barra [data-testid="stRadioGroup"]>div{flex:1 1 0;min-width:0}
+.st-key-barra [data-testid="stRadioOption"]{display:flex;width:100%;justify-content:center;
+              padding:6px 0;margin:0;border-radius:12px;cursor:pointer}
+.st-key-barra [data-testid="stRadioOption"]>div>div:first-child{display:none}
+.st-key-barra [data-testid="stRadioOption"][data-selected="true"]{background:#d6203a}
+.st-key-barra [data-testid="stMarkdownContainer"] p{font-size:22px;line-height:1.2;margin:0;text-align:center}
 </style>""", unsafe_allow_html=True)
 
 
@@ -143,13 +153,18 @@ def voltar_lista():
     ss.sel = None
 
 
-def curtir(aid):
-    if aid in ss.liked:
-        return
+def curtir(aid, u):
+    """Curtir e desfazer a curtida com o mesmo botão (1 curtida por usuário por avaliação)."""
+    L = ler("likes.csv")
+    tem = (L["usuario"] == u) & (L["avaliacao_id"] == aid)
     df = ler("avaliacoes.csv")
-    df.loc[df["id"] == aid, "curtidas"] += 1
+    if tem.any():
+        L[~tem].to_csv("likes.csv", index=False, encoding="utf-8")
+        df.loc[df["id"] == aid, "curtidas"] = (df.loc[df["id"] == aid, "curtidas"] - 1).clip(lower=0)
+    else:
+        gd.adicionar("likes.csv", {"usuario": u, "avaliacao_id": aid})
+        df.loc[df["id"] == aid, "curtidas"] += 1
     df.to_csv("avaliacoes.csv", index=False, encoding="utf-8")
-    ss.liked.add(aid)
 
 
 def alternar_lista(u, rid):
@@ -261,9 +276,9 @@ def detalhe(u, rid):
     av = av[av["restaurante_id"] == rid]
     if len(av):
         st.markdown("##### Distribuição das notas")
-        cont = av["nota"].astype(float).value_counts().reindex([k * 0.5 for k in range(1, 11)], fill_value=0)
-        rot = ["½", "1", "1½", "2", "2½", "3", "3½", "4", "4½", "5"]
-        st.markdown(histograma(list(cont.values), rot), unsafe_allow_html=True)
+        cont = av["nota"].astype(float).round().astype(int).value_counts().reindex(range(1, 6), fill_value=0)
+        st.markdown(histograma(list(cont.values), ["★" * k for k in range(1, 6)], altura=100),
+                    unsafe_allow_html=True)
         pr = av.groupby("prato")["nota"].agg(["mean", "count"]).sort_values("mean", ascending=False)
         st.markdown("##### Pratos")
         st.markdown("".join(
@@ -275,9 +290,12 @@ def detalhe(u, rid):
         st.markdown("".join(f"<span class='pill'>{esc(t)} · {n}</span>" for t, n in tg.items()),
                     unsafe_allow_html=True)
         st.markdown("##### Avaliações populares")
+        L = ler("likes.csv")
+        curtiu = set(L.loc[L["usuario"] == u, "avaliacao_id"])
         for _, a in av.sort_values(["curtidas", "id"], ascending=False).head(5).iterrows():
             st.markdown(review_html(a), unsafe_allow_html=True)
-            st.button(f"❤ {int(a['curtidas'])}", key=f"like{a['id']}", on_click=curtir, args=(int(a["id"]),))
+            st.button(f"{'❤️' if a['id'] in curtiu else '🤍'} {int(a['curtidas'])}", key=f"like{a['id']}",
+                      on_click=curtir, args=(int(a["id"]), u))
     else:
         st.info("Ainda sem avaliações. Seja o primeiro a dar a nota.")
 
@@ -311,6 +329,30 @@ def pg_explorar(u):
                   width="stretch")
 
 
+def escanear():
+    """Botão que abre a câmera, lê o QR da mesa e preenche o código. A câmera do navegador
+    exige HTTPS (ou localhost); sem isso, use o envio de foto logo abaixo."""
+    st.button("✖ Cancelar leitura" if ss.scan else "📷 Escanear QR code", key="btn_scan", width="stretch",
+              on_click=lambda: ss.update(scan=not ss.scan))
+    if not ss.scan:
+        return
+    foto = st.camera_input("Aponte a câmera para o QR da mesa", key=f"cam{ss.cam_n}")
+    if not foto:
+        with st.expander("Sem câmera no navegador? Envie uma foto do QR"):
+            foto = st.file_uploader("Foto do QR", type=["png", "jpg", "jpeg"], key=f"up{ss.cam_n}")
+    if foto:
+        try:
+            codigo = decodificar_qr(foto.getvalue())
+        except ImportError:
+            st.error("Leitura de QR indisponível: instale opencv-python-headless.")
+            return
+        if codigo:
+            ss.mesa, ss.scan, ss.cam_n = codigo, False, ss.cam_n + 1
+            st.rerun(scope="fragment")
+        else:
+            st.error("Não encontrei um QR code na foto. Chegue mais perto e tente de novo.")
+
+
 def pg_avaliar(u):
     fase = cfg()["fase"]
     st.markdown("#### 📲 Avaliar")
@@ -319,7 +361,8 @@ def pg_avaliar(u):
                    else "O circuito terminou. Veja seu mapa de selos no perfil.")
         return
     st.caption("Sente, consuma e escaneie o QR da mesa. Só avalia quem esteve lá.")
-    cod = st.text_input("Código da mesa", value=ss.get("mesa", ""), placeholder="ex.: 3-M2").strip().upper()
+    escanear()
+    cod = st.text_input("Código da mesa (ou digite)", value=ss.get("mesa", ""), placeholder="ex.: 3-M2").strip().upper()
     if cod:
         try:
             a, b = cod.split("-M")
@@ -336,13 +379,16 @@ def pg_avaliar(u):
                          f"<span class='muted'>Mesa {mesa} confirmada ✓</span></div></div>"), unsafe_allow_html=True)
         pratos = list(ler("pratos.csv").query("restaurante_id == @rid")["prato"]) + ["Outro prato"]
         prato = st.selectbox("Qual prato você avalia?", pratos)
-        nota = st.select_slider("Sua nota", options=[k * 0.5 for k in range(1, 11)], value=4.0)
-        st.markdown(f"<span class='star' style='font-size:28px'>{estrelas(nota)}</span>", unsafe_allow_html=True)
+        st.caption("Sua nota (toque nas estrelas)")
+        idx = st.feedback("stars", key=f"nota_{rid}")
+        nota = None if idx is None else idx + 1
         tags = st.pills("O que marcou?", gd.TAGS_POS + gd.TAGS_NEG, selection_mode="multi")
         com = st.text_area("Seu veredito (opcional)", max_chars=140)
         if st.button("Publicar avaliação", type="primary", width="stretch"):
             av = ler("avaliacoes.csv")
-            if ((av["usuario"] == u) & (av["restaurante_id"] == rid) & (av["data"] == str(HOJE))).any():
+            if nota is None:
+                st.warning("Escolha de 1 a 5 estrelas antes de publicar.")
+            elif ((av["usuario"] == u) & (av["restaurante_id"] == rid) & (av["data"] == str(HOJE))).any():
                 st.warning("Você já avaliou este restaurante hoje.")
             else:
                 antes = set(selos_de(u))
@@ -547,7 +593,8 @@ def corpo():
 ss.setdefault("pagina", "home")
 ss.setdefault("sel", None)
 ss.setdefault("user", None)
-ss.setdefault("liked", set())
+ss.setdefault("scan", False)
+ss.setdefault("cam_n", 0)
 ss.setdefault("consumos", set())
 
 qp = st.query_params

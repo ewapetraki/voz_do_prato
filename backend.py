@@ -3,13 +3,14 @@
 Regras principais
 -----------------
 Estrelas Michelin  : inteiros 0, 1, 2 ou 3 (escala discreta, simulada neste protótipo).
-Nota do Público    : média das notas (0,5 a 5,0) suavizada com 3 notas "fantasma" de valor 3,5,
+Nota do Público    : média das notas (1 a 5 estrelas inteiras) suavizada com 3 notas "fantasma" de valor 3,5,
                      para que poucos votos não distorçam o ranking.
 Índice Voz do Prato: Nota do Público + bônus Michelin (0,20 por estrela, máx. +0,60), limitado a 5,0.
                      Sem estrela = sem bônus (não penaliza botecos e casas fora do Guia).
 """
 import datetime as dt
 import os
+import re
 
 import pandas as pd
 
@@ -20,7 +21,7 @@ HOJE = dt.date.today()
 BONUS_POR_ESTRELA = 0.20     # peso de cada estrela Michelin no índice
 PRIOR_NOTA, PRIOR_PESO = 3.5, 3
 META_SELOS = 3               # selos distintos para liberar 1 sobremesa
-NOTAS_VALIDAS = [k * 0.5 for k in range(1, 11)]   # 0,5 a 5,0
+NOTAS_VALIDAS = [1, 2, 3, 4, 5]   # estrelas inteiras
 
 
 # ------------------------------------------------------------------ acesso a dados
@@ -151,3 +152,30 @@ def kpis():
         "taxa_resgate": resgatadas / max(liberadas, 1),
         "shares": int(shares), "ugc": int((av["comentario"] != "").sum()),
     }
+
+
+# ------------------------------------------------------------------ leitura de QR code
+def extrair_mesa(texto):
+    """Extrai o código da mesa ('3-M2') de uma URL com ?mesa=3-M2 ou do próprio código."""
+    texto = (texto or "").strip()
+    m = re.search(r"mesa=(\d+-M\d+)", texto, re.I) or re.fullmatch(r"(\d+-M\d+)", texto, re.I)
+    return m.group(1).upper() if m else None
+
+
+def decodificar_qr(imagem_bytes):
+    """Lê um QR code de uma foto (bytes) e devolve o código da mesa, ou None se não achar.
+
+    Requer opencv-python-headless (importado só aqui, para o resto do app funcionar sem ele).
+    """
+    import cv2
+    import numpy as np
+    img = cv2.imdecode(np.frombuffer(imagem_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    det = cv2.QRCodeDetector()
+    for tentativa in (img, cv2.cvtColor(img, cv2.COLOR_BGR2GRAY),
+                      cv2.resize(img, None, fx=0.5, fy=0.5)):     # reduzir ajuda em fotos grandes
+        dados, _, _ = det.detectAndDecode(tentativa)
+        if dados:
+            return extrair_mesa(dados)
+    return None
