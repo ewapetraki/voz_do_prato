@@ -52,6 +52,15 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stSideb
 .stamp{border-radius:14px;padding:16px 6px;text-align:center;color:#fff;border:1px solid #2e353f}
 .stamp .logo{margin:0 auto 8px auto}
 .stamp.off{filter:grayscale(1);opacity:.35}
+.hist{display:flex;align-items:flex-end;gap:4px;margin:6px 0 14px 0}
+.hb{flex:1;display:flex;flex-direction:column;align-items:center;min-width:0}
+.hbar{width:100%;background:#ffb400;border-radius:3px 3px 0 0;min-height:2px}
+.hn,.hl{font-size:10px;color:#98a2b3;line-height:1.5}
+.hrow{margin-bottom:10px}
+.hrl{display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px}
+.hrl b{color:#ffb400}
+.hrb{background:#2e353f;border-radius:6px;height:10px;overflow:hidden}
+.hrb div{background:#d6203a;height:10px;border-radius:6px}
 .st-key-barra{position:fixed;bottom:0;left:0;right:0;z-index:999;background:#15181d;
               border-top:1px solid #2e353f;padding:4px 8px calc(4px + env(safe-area-inset-bottom))}
 .st-key-barra [role=radiogroup]{display:flex;justify-content:space-around;width:100%;max-width:480px;margin:0 auto}
@@ -100,6 +109,23 @@ def review_html(a, nome=None):
     com = f"<br>{esc(a['comentario'])}" if a["comentario"] else ""
     return card(f"{cab} <span class='star'>{estrelas(a['nota'])}</span><br>"
                 f"<span class='muted'>{esc(a['prato'])} · {a['data']}</span>{com}<br>{tags}")
+
+
+def histograma(contagens, rotulos, altura=90):
+    """Barras verticais estáticas em HTML/CSS (nada é clicável, arrastável ou ampliável)."""
+    mx = max(max(contagens), 1)
+    cols = "".join(f"<div class='hb'><span class='hn'>{int(n)}</span>"
+                   f"<div class='hbar' style='height:{round(n / mx * altura)}px'></div>"
+                   f"<span class='hl'>{r}</span></div>" for n, r in zip(contagens, rotulos))
+    return f"<div class='hist'>{cols}</div>"
+
+
+def barras_h(itens):
+    """Barras horizontais estáticas. `itens`: dict rótulo -> valor."""
+    mx = max(max(itens.values()), 1)
+    return "".join(f"<div class='hrow'><div class='hrl'><span>{esc(k)}</span><b>{int(v)}</b></div>"
+                   f"<div class='hrb'><div style='width:{v / mx * 100:.1f}%'></div></div></div>"
+                   for k, v in itens.items())
 
 
 def notif_html(ns):
@@ -235,8 +261,9 @@ def detalhe(u, rid):
     av = av[av["restaurante_id"] == rid]
     if len(av):
         st.markdown("##### Distribuição das notas")
-        st.bar_chart(av["nota"].astype(float).value_counts()
-                     .reindex([k * 0.5 for k in range(1, 11)], fill_value=0))
+        cont = av["nota"].astype(float).value_counts().reindex([k * 0.5 for k in range(1, 11)], fill_value=0)
+        rot = ["½", "1", "1½", "2", "2½", "3", "3½", "4", "4½", "5"]
+        st.markdown(histograma(list(cont.values), rot), unsafe_allow_html=True)
         pr = av.groupby("prato")["nota"].agg(["mean", "count"]).sort_values("mean", ascending=False)
         st.markdown("##### Pratos")
         st.markdown("".join(
@@ -468,14 +495,14 @@ def painel():
                                  f"<span class='star'>{val}</span></div><span class='muted'>{desc}</span>")
                             for nome, val, desc in linhas), unsafe_allow_html=True)
     with t2:
-        et = pd.Series({"1 Acessos (topo)": k["acessos"], "2 Cadastros (meio)": k["cadastros"],
-                        "3 Consumos validados (fundo)": k["consumos"], "4 Avaliações": k["avaliacoes"],
-                        "5 Voltaram (retenção)": k["voltaram"], "6 Resgates": k["resgatadas"]})
-        st.bar_chart(et, horizontal=True)
+        st.markdown(barras_h({"1 Acessos (topo)": k["acessos"], "2 Cadastros (meio)": k["cadastros"],
+                              "3 Consumos validados (fundo)": k["consumos"], "4 Avaliações": k["avaliacoes"],
+                              "5 Voltaram (retenção)": k["voltaram"], "6 Resgates": k["resgatadas"]}),
+                    unsafe_allow_html=True)
         st.caption("Funil do PDF: topo (atração) → meio (consideração) → fundo (conversão) → pós (retenção).")
     with t3:
         st.info(f"Fase atual no app: **{cfg()['fase']}**")
-        st.dataframe(REGUA, hide_index=True, width="stretch")
+        st.table(REGUA.set_index("Fase"))
     with t4:
         st.markdown("**Cartão de mesa (QR)**")
         st.code("Você sentou. Você provou. Agora você opina.\nEscaneie, avalie este prato e ganhe o selo "
