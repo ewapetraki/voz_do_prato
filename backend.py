@@ -9,6 +9,7 @@ Nota do Público    : média das notas (0,5 a 5,0) suavizada com 3 notas "fantas
                      Sem estrela = sem bônus (não penaliza botecos e casas fora do Guia).
 """
 import datetime as dt
+import os
 
 import pandas as pd
 
@@ -23,9 +24,19 @@ NOTAS_VALIDAS = [k * 0.5 for k in range(1, 11)]   # 0,5 a 5,0
 
 
 # ------------------------------------------------------------------ acesso a dados
+_CACHE = {}
+
+
 def ler(arq):
-    """Lê um CSV sem converter textos vazios em NaN."""
-    return pd.read_csv(arq, keep_default_na=False)
+    """Lê um CSV (sem converter textos vazios em NaN) com cache invalidado quando o arquivo muda.
+
+    Devolve sempre uma CÓPIA, então quem chama pode alterar o DataFrame à vontade.
+    """
+    st_ = os.stat(arq)
+    chave = (st_.st_mtime_ns, st_.st_size)
+    if arq not in _CACHE or _CACHE[arq][0] != chave:
+        _CACHE[arq] = (chave, pd.read_csv(arq, keep_default_na=False))
+    return _CACHE[arq][1].copy()
 
 
 def cfg():
@@ -128,7 +139,6 @@ def kpis():
     dias = av.groupby("usuario")["data"].nunique()
     liberadas = (av.groupby("usuario")["restaurante_id"].nunique() // META_SELOS).sum()
     resgatadas = len(ler("resgates.csv"))
-    nps = ler("nps.csv")["nota"].astype(float)
     return {
         "alcance": int(c["impressoes"]), "acessos": int(acessos), "cadastros": int(cadastros),
         "consumos": int(consumos), "avaliacoes": len(av),
@@ -140,5 +150,4 @@ def kpis():
         "liberadas": int(liberadas), "resgatadas": int(resgatadas),
         "taxa_resgate": resgatadas / max(liberadas, 1),
         "shares": int(shares), "ugc": int((av["comentario"] != "").sum()),
-        "nps": ((nps >= 9).mean() - (nps <= 6).mean()) * 100 if len(nps) else 0,
     }

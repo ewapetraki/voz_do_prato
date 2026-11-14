@@ -1,6 +1,8 @@
 """Voz do Prato · Taste, Norte Shopping  (MVP mobile-first em Streamlit)
 Rodar:  streamlit run app.py --server.address 0.0.0.0
+Painel da campanha (oculto): abra o app com  ?painel=CHAVE  (ver chave_painel()).
 """
+import base64
 import datetime as dt
 import hashlib
 import html
@@ -23,28 +25,33 @@ if not (os.path.exists("pratos.csv") and os.path.exists("eventos.csv")):
 
 esc = html.escape
 ss = st.session_state
+PASTA = os.path.dirname(os.path.abspath(__file__))
 
 # ------------------------------------------------------------------ estilo
 st.markdown("""<style>
-#MainMenu, footer {visibility:hidden}
-.block-container{max-width:480px;padding:1rem 1rem 6rem 1rem}
+/* some com barra superior, menu lateral e atalhos do Streamlit (quando o host permitir) */
+header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stSidebar"],
+[data-testid="stSidebarCollapsedControl"], [data-testid="stExpandSidebarButton"],
+#MainMenu, footer {display:none !important}
+.block-container{max-width:480px;padding:calc(3.8rem + env(safe-area-inset-top)) 1rem 6rem 1rem}
 .card{background:#1e232a;border:1px solid #2e353f;border-radius:12px;padding:12px 14px;margin:0 0 10px 0;
       line-height:1.4}
 .hero{border-radius:14px;padding:20px 14px;text-align:center;margin-bottom:12px;color:#fff}
 .hero .e{font-size:56px;line-height:1.1}.hero b{display:block;font-size:21px}
+.hero .logo{margin:0 auto 8px auto}
 .star{color:#ffb400;letter-spacing:1px}
 .muted{color:#98a2b3;font-size:13px}
 .pill{display:inline-block;background:#2e353f;border-radius:20px;padding:2px 10px;margin:3px 4px 0 0;font-size:12px}
 .row{display:flex;gap:12px;align-items:center}
-.tile{width:56px;height:56px;border-radius:12px;display:flex;align-items:center;justify-content:center;
-      font-size:30px;flex:none}
+.tile{border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:30px;flex:none}
+.logo{flex:none;display:block;border:1px solid #2e353f}
 .trio{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px}
 .trio div{background:#1e232a;border:1px solid #2e353f;border-radius:12px;padding:10px 4px;text-align:center}
 .trio b{display:block;font-size:22px;color:#ffb400}.trio span{font-size:11px;color:#98a2b3}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
 .stamp{border-radius:14px;padding:16px 6px;text-align:center;color:#fff;border:1px solid #2e353f}
-.stamp .e{font-size:42px;display:block}.stamp small{opacity:.9}
-.stamp.off{filter:grayscale(1);opacity:.3}
+.stamp .logo{margin:0 auto 8px auto}
+.stamp.off{filter:grayscale(1);opacity:.35}
 .st-key-barra{position:fixed;bottom:0;left:0;right:0;z-index:999;background:#15181d;
               border-top:1px solid #2e353f;padding:4px 8px calc(4px + env(safe-area-inset-bottom))}
 .st-key-barra [role=radiogroup]{display:flex;justify-content:space-around;width:100%;max-width:480px;margin:0 auto}
@@ -54,7 +61,7 @@ st.markdown("""<style>
 </style>""", unsafe_allow_html=True)
 
 
-# ------------------------------------------------------------------ dados
+# ------------------------------------------------------------------ helpers de interface
 def estrelas(n):
     n = float(n)
     return "★" * int(n) + ("½" if n - int(n) >= 0.5 else "")
@@ -62,6 +69,41 @@ def estrelas(n):
 
 def card(conteudo):
     return f"<div class='card'>{conteudo}</div>"
+
+
+@st.cache_data(show_spinner=False)
+def logo_uri(rid):
+    """Foto de perfil do restaurante (assets/logos/<id>.jpg) como data URI."""
+    p = os.path.join(PASTA, "assets", "logos", f"{rid}.jpg")
+    if not os.path.exists(p):
+        return ""
+    with open(p, "rb") as f:
+        return "data:image/jpeg;base64," + base64.b64encode(f.read()).decode()
+
+
+def css_logos():
+    """Uma regra CSS por logo. Vai no CSS global, enviado uma vez por sessão (não a cada tela)."""
+    ids = ler("restaurantes.csv")["id"]
+    return "".join(f".lg{i}{{background:url({logo_uri(int(i))}) center/cover no-repeat #fff}}"
+                   for i in ids if logo_uri(int(i)))
+
+
+def logo(r, px=56, raio=12):
+    if not logo_uri(int(r["id"])):     # sem imagem: usa o emoji provisório
+        return f"<div class='tile' style='background:{r['cor']};width:{px}px;height:{px}px'>{r['selo']}</div>"
+    return f"<div class='logo lg{int(r['id'])}' style='width:{px}px;height:{px}px;border-radius:{raio}px'></div>"
+
+
+def review_html(a, nome=None):
+    tags = "".join(f"<span class='pill'>{esc(t)}</span>" for t in str(a["tags"]).split("|") if t)
+    cab = f"<b>{esc(a['usuario'])}</b>" + (f" em <b>{esc(nome)}</b>" if nome else "")
+    com = f"<br>{esc(a['comentario'])}" if a["comentario"] else ""
+    return card(f"{cab} <span class='star'>{estrelas(a['nota'])}</span><br>"
+                f"<span class='muted'>{esc(a['prato'])} · {a['data']}</span>{com}<br>{tags}")
+
+
+def notif_html(ns):
+    return "".join(card(f"{ic} <b>{esc(tit)}</b><br><span class='muted'>{esc(tx)}</span>") for ic, tit, tx in ns)
 
 
 # ------------------------------------------------------------------ callbacks
@@ -93,15 +135,6 @@ def alternar_lista(u, rid):
         gd.adicionar("querer_ir.csv", {"usuario": u, "restaurante_id": rid})
 
 
-# ------------------------------------------------------------------ componentes
-def review_html(a, nome=None):
-    tags = "".join(f"<span class='pill'>{esc(t)}</span>" for t in str(a["tags"]).split("|") if t)
-    cab = f"<b>{esc(a['usuario'])}</b>" + (f" em <b>{esc(nome)}</b>" if nome else "")
-    com = f"<br>{esc(a['comentario'])}" if a["comentario"] else ""
-    return card(f"{cab} <span class='star'>{estrelas(a['nota'])}</span><br>"
-                f"<span class='muted'>{esc(a['prato'])} · {a['data']}</span>{com}<br>{tags}")
-
-
 # ------------------------------------------------------------------ telas
 def tela_cadastro():
     st.markdown("<div class='hero' style='background:linear-gradient(160deg,#d6203a,#5c0b19)'>"
@@ -123,7 +156,7 @@ def tela_cadastro():
         ss.user = ap
         st.query_params["u"] = ap
         st.rerun()
-    st.caption("Protótipo acadêmico: avaliações, Nota Michelin e preços são simulados.")
+    st.caption("Protótipo acadêmico: avaliações, estrelas Michelin e preços são simulados.")
 
 
 def pg_home(u):
@@ -134,13 +167,10 @@ def pg_home(u):
     st.caption(("🟢 Taste aberto agora, até " + fecha) if aberto else "🔴 Taste fechado agora, abre às 11h")
     if fase == "Pré-lançamento":
         st.info("A campanha ainda não começou. Você está na lista de espera.")
-    ic, tit, tx = ns[0]
-    st.markdown(card(f"{ic} <b>{esc(tit)}</b><br><span class='muted'>{esc(tx)}</span>"), unsafe_allow_html=True)
+    st.markdown(notif_html(ns[:1]), unsafe_allow_html=True)
     if len(ns) > 1:
         with st.expander(f"🔔 Mais {len(ns) - 1} notificações"):
-            for ic, tit, tx in ns[1:]:
-                st.markdown(card(f"{ic} <b>{esc(tit)}</b><br><span class='muted'>{esc(tx)}</span>"),
-                            unsafe_allow_html=True)
+            st.markdown(notif_html(ns[1:]), unsafe_allow_html=True)
 
     av, R = ler("avaliacoes.csv"), ler("restaurantes.csv")
     nomes = R.set_index("id")["nome"]
@@ -149,50 +179,53 @@ def pg_home(u):
     st.markdown("##### Em alta esta semana")
     top = stats(av[av["d"] >= HOJE - dt.timedelta(days=7)]).sort_values("indice", ascending=False).head(3)
     for i, (_, r) in enumerate(top.iterrows(), 1):
-        st.markdown(card(f"<div class='row'><div class='tile' style='background:{r['cor']}'>{r['selo']}</div>"
+        st.markdown(card(f"<div class='row'>{logo(r)}"
                          f"<div><b>{i}. {esc(r['nome'])}</b><br><span class='star'>{estrelas(round(r['publico'] * 2) / 2)}</span> "
                          f"<span class='muted'>Índice {r['indice']}</span></div></div>"), unsafe_allow_html=True)
         st.button("Ver restaurante", key=f"alta{r['id']}", on_click=ir, args=("explorar", int(r["id"])),
                   width="stretch")
 
     st.markdown("##### Destaques")
+    blocos = []
     dmax = av["d"].max()
     dia = av[av["d"] == dmax]
     if len(dia):
         crit = dia.groupby("usuario")["curtidas"].sum().idxmax()
-        st.markdown(card(f"🎙️ <b>Crítico do dia</b><br>{esc(crit)} <span class='muted'>({dmax})</span>"),
-                    unsafe_allow_html=True)
+        blocos.append(card(f"🎙️ <b>Crítico do dia</b><br>{esc(crit)} <span class='muted'>({dmax})</span>"))
     pr = av[av["prato"] != ""].groupby(["restaurante_id", "prato"])["nota"].agg(["mean", "count"]).reset_index()
     pr = pr[pr["count"] >= 3].sort_values(["mean", "count"], ascending=False)
     if len(pr):
         p = pr.iloc[0]
-        st.markdown(card(f"🥇 <b>Prato mais bem votado</b><br>{esc(p['prato'])} · {esc(nomes[p['restaurante_id']])}<br>"
-                         f"<span class='star'>{estrelas(round(p['mean'] * 2) / 2)}</span> "
-                         f"<span class='muted'>{p['mean']:.1f} · {int(p['count'])} votos</span>"),
-                    unsafe_allow_html=True)
+        blocos.append(card(f"🥇 <b>Prato mais bem votado</b><br>{esc(p['prato'])} · {esc(nomes[p['restaurante_id']])}<br>"
+                           f"<span class='star'>{estrelas(round(p['mean'] * 2) / 2)}</span> "
+                           f"<span class='muted'>{p['mean']:.1f} · {int(p['count'])} votos</span>"))
+    st.markdown("".join(blocos), unsafe_allow_html=True)
 
     st.markdown("##### Críticos da Zona Norte")
-    for i, (_, c) in enumerate(ranking_criticos().head(5).iterrows(), 1):
-        st.markdown(card(f"<b>{i}. {esc(c['usuario'])}</b> <span class='muted'>{esc(str(c['bairro']))} · "
-                         f"{int(c['rest'])} selos · {int(c['aval'])} avaliações</span>"), unsafe_allow_html=True)
+    st.markdown("".join(
+        card(f"<b>{i}. {esc(c['usuario'])}</b> <span class='muted'>{esc(str(c['bairro']))} · "
+             f"{int(c['rest'])} selos · {int(c['aval'])} avaliações</span>")
+        for i, (_, c) in enumerate(ranking_criticos().head(5).iterrows(), 1)), unsafe_allow_html=True)
 
     st.markdown("##### Atividade recente")
-    for _, a in av.sort_values("id", ascending=False).head(5).iterrows():
-        st.markdown(review_html(a, nomes[a["restaurante_id"]]), unsafe_allow_html=True)
+    st.markdown("".join(review_html(a, nomes[a["restaurante_id"]])
+                        for _, a in av.sort_values("id", ascending=False).head(5).iterrows()),
+                unsafe_allow_html=True)
 
 
 def detalhe(u, rid):
     S = stats()
     r = S[S["id"] == rid].iloc[0]
     st.button("← Voltar", on_click=voltar_lista)
-    st.markdown(f"<div class='hero' style='background:{r['cor']}'><div class='e'>{r['selo']}</div>"
+    st.markdown(f"<div class='hero' style='background:{r['cor']}'>{logo(r, 96, 48)}"
                 f"<b>{esc(r['nome'])}</b>{esc(r['categoria'])} · {r['preco']}</div>", unsafe_allow_html=True)
     st.write(r["descricao"])
     st.markdown(f"<div class='trio'><div><b>{r['michelin_txt']}</b><span>Estrelas Michelin<br>(simuladas)</span></div>"
                 f"<div><b>{r['publico']}</b><span>Nota do Público<br>{int(r['count'])} avaliações</span></div>"
                 f"<div><b>{r['indice']}</b><span>Índice<br>Voz do Prato</span></div></div>", unsafe_allow_html=True)
 
-    na_lista = ((ler("querer_ir.csv")["usuario"] == u) & (ler("querer_ir.csv")["restaurante_id"] == rid)).any()
+    q = ler("querer_ir.csv")
+    na_lista = ((q["usuario"] == u) & (q["restaurante_id"] == rid)).any()
     st.button("✓ Na sua lista" if na_lista else "➕ Quero provar", key="qp", on_click=alternar_lista,
               args=(u, rid), width="stretch")
     st.button("📲 Avaliar (tenho um código de mesa)", key="av_ir", on_click=ir, args=("avaliar",),
@@ -206,16 +239,16 @@ def detalhe(u, rid):
                      .reindex([k * 0.5 for k in range(1, 11)], fill_value=0))
         pr = av.groupby("prato")["nota"].agg(["mean", "count"]).sort_values("mean", ascending=False)
         st.markdown("##### Pratos")
-        for prato, p in pr.iterrows():
-            st.markdown(card(f"<b>{esc(prato)}</b> <span class='star'>{estrelas(round(p['mean'] * 2) / 2)}</span> "
-                             f"<span class='muted'>{p['mean']:.1f} · {int(p['count'])} votos</span>"),
-                        unsafe_allow_html=True)
+        st.markdown("".join(
+            card(f"<b>{esc(prato)}</b> <span class='star'>{estrelas(round(p['mean'] * 2) / 2)}</span> "
+                 f"<span class='muted'>{p['mean']:.1f} · {int(p['count'])} votos</span>")
+            for prato, p in pr.iterrows()), unsafe_allow_html=True)
         tg = av["tags"].str.split("|").explode()
         tg = tg[tg != ""].value_counts().head(5)
         st.markdown("".join(f"<span class='pill'>{esc(t)} · {n}</span>" for t, n in tg.items()),
                     unsafe_allow_html=True)
         st.markdown("##### Avaliações populares")
-        for _, a in av.sort_values(["curtidas", "id"], ascending=False).head(6).iterrows():
+        for _, a in av.sort_values(["curtidas", "id"], ascending=False).head(5).iterrows():
             st.markdown(review_html(a), unsafe_allow_html=True)
             st.button(f"❤ {int(a['curtidas'])}", key=f"like{a['id']}", on_click=curtir, args=(int(a["id"]),))
     else:
@@ -242,7 +275,7 @@ def pg_explorar(u):
     if S.empty:
         st.info("Nenhum restaurante com esses filtros.")
     for _, r in S.iterrows():
-        st.markdown(card(f"<div class='row'><div class='tile' style='background:{r['cor']}'>{r['selo']}</div><div>"
+        st.markdown(card(f"<div class='row'>{logo(r)}<div>"
                          f"<b>{esc(r['nome'])}</b><br><span class='muted'>{esc(r['categoria'])} · {r['preco']}</span><br>"
                          f"<span class='star'>{estrelas(round(r['publico'] * 2) / 2)}</span> "
                          f"<span class='muted'>{r['publico']:.1f} · {int(r['count'])} avaliações</span></div></div>"),
@@ -272,7 +305,8 @@ def pg_avaliar(u):
         if (cod, str(HOJE)) not in ss.consumos:
             ss.consumos.add((cod, str(HOJE)))
             evento("consumo", u)
-        st.success(f"Mesa {mesa} confirmada: {r['selo']} {r['nome']}")
+        st.markdown(card(f"<div class='row'>{logo(r, 48, 10)}<div><b>{esc(r['nome'])}</b><br>"
+                         f"<span class='muted'>Mesa {mesa} confirmada ✓</span></div></div>"), unsafe_allow_html=True)
         pratos = list(ler("pratos.csv").query("restaurante_id == @rid")["prato"]) + ["Outro prato"]
         prato = st.selectbox("Qual prato você avalia?", pratos)
         nota = st.select_slider("Sua nota", options=[k * 0.5 for k in range(1, 11)], value=4.0)
@@ -289,19 +323,21 @@ def pg_avaliar(u):
                                                 "prato": prato, "nota": nota, "tags": "|".join(tags or []),
                                                 "comentario": com.strip(), "data": str(HOJE), "curtidas": 0})
                 evento("avaliacao", u)
-                ss.ultima = {"nome": r["nome"], "selo": r["selo"], "nota": nota, "novo": rid not in antes,
+                ss.ultima = {"rid": rid, "nome": r["nome"], "nota": nota, "novo": rid not in antes,
                              "n": len(set(selos_de(u))), "share": False}
                 st.balloons()
 
     ult = ss.get("ultima")
     if ult:
+        R = ler("restaurantes.csv")
+        rr = R[R["id"] == ult["rid"]].iloc[0]
         titulo = "Selo conquistado: " if ult["novo"] else "Avaliação publicada: "
         if ult["n"] >= 3:
             progresso = "Sobremesa liberada na aba Selos!"
         else:
             progresso = "Faltam " + str(3 - ult["n"]) + " para a sobremesa."
-        st.markdown(card(f"<div style='text-align:center'><span style='font-size:48px'>{ult['selo']}</span><br>"
-                         f"<b>{titulo}{esc(ult['nome'])}</b><br>"
+        st.markdown(card(f"<div style='text-align:center'><div style='display:flex;justify-content:center'>{logo(rr, 72, 36)}</div>"
+                         f"<br><b>{titulo}{esc(ult['nome'])}</b><br>"
                          f"<span class='muted'>Você tem {ult['n']} selo(s). {progresso}</span></div>"),
                     unsafe_allow_html=True)
         if st.button("📤 Compartilhar", width="stretch"):
@@ -322,7 +358,7 @@ def pg_selos(u):
     st.caption("Colecione os 8 selos do Taste.")
     cel = "".join(
         f"<div class='stamp{'' if r['id'] in meus else ' off'}' style='background:{r['cor']}'>"
-        f"<span class='e'>{r['selo'] if r['id'] in meus else '🔒'}</span><b>{esc(r['nome'])}</b></div>"
+        f"{logo(r, 72, 36)}<b>{esc(r['nome'])}{'' if r['id'] in meus else ' 🔒'}</b></div>"
         for _, r in R.iterrows())
     st.markdown(f"<div class='grid'>{cel}</div>", unsafe_allow_html=True)
     st.progress(min((n % 3) / 3 if n < 8 else 1.0, 1.0), text=f"{n} de 8 selos")
@@ -338,9 +374,10 @@ def pg_selos(u):
             st.rerun()
     else:
         st.info(f"Faltam {3 - n % 3} selo(s) para a próxima sobremesa grátis.")
-    for _, v in meus_res.iterrows():
-        st.markdown(card(f"🎟️ <b>{esc(v['codigo'])}</b><br><span class='muted'>Mostre ao atendente · {v['data']}</span>"),
-                    unsafe_allow_html=True)
+    if len(meus_res):
+        st.markdown("".join(
+            card(f"🎟️ <b>{esc(v['codigo'])}</b><br><span class='muted'>Mostre ao atendente · {v['data']}</span>")
+            for _, v in meus_res.iterrows()), unsafe_allow_html=True)
     if n == 8:
         st.markdown(card("🏆 <b>Crítico completo do Taste</b><br><span class='muted'>Você coletou todos os selos.</span>"),
                     unsafe_allow_html=True)
@@ -354,7 +391,7 @@ def pg_perfil(u):
     n = len(set(meu["restaurante_id"]))
     nivel = "Provador" if n < 3 else ("Crítico" if n < 6 else "Crítico da Zona Norte")
     avatar = ["🧑‍🍳", "😋", "🍴", "🥘", "🍻"][int(hashlib.md5(u.encode()).hexdigest(), 16) % 5]
-    st.markdown(card(f"<div class='row'><div class='tile' style='background:#2e353f'>{avatar}</div><div>"
+    st.markdown(card(f"<div class='row'><div class='tile' style='background:#2e353f;width:56px;height:56px'>{avatar}</div><div>"
                      f"<b>{esc(u)}</b><br><span class='muted'>{esc(str(bairro))} · {nivel}</span></div></div>"),
                 unsafe_allow_html=True)
     media = f"{meu['nota'].astype(float).mean():.1f}" if len(meu) else "-"
@@ -364,8 +401,8 @@ def pg_perfil(u):
 
     st.markdown("##### Meu diário")
     if len(meu):
-        for _, a in meu.head(8).iterrows():
-            st.markdown(review_html(a, nomes[a["restaurante_id"]]), unsafe_allow_html=True)
+        st.markdown("".join(review_html(a, nomes[a["restaurante_id"]]) for _, a in meu.head(8).iterrows()),
+                    unsafe_allow_html=True)
     else:
         st.info("Seu diário está vazio. Escaneie um QR de mesa para registrar a primeira.")
 
@@ -374,23 +411,13 @@ def pg_perfil(u):
     st.markdown("##### Quero provar")
     st.write(", ".join(q["restaurante_id"].map(nomes)) if len(q) else "Nenhum restaurante na lista.")
 
-    if len(meu):
-        st.markdown("##### Pesquisa rápida (NPS)")
-        if u in set(ler("nps.csv")["usuario"]):
-            st.success("Obrigado pela resposta!")
-        else:
-            nota = st.slider("De 0 a 10, quanto você recomendaria esta experiência?", 0, 10, 8)
-            if st.button("Enviar", width="stretch"):
-                gd.adicionar("nps.csv", {"usuario": u, "nota": nota, "data": str(HOJE)})
-                st.rerun()
-
     if st.button("Sair da conta", width="stretch"):
         ss.user = None
         st.query_params.pop("u", None)
         st.rerun()
 
 
-# ------------------------------------------------------------------ painel da campanha
+# ------------------------------------------------------------------ painel da campanha (oculto)
 REGUA = pd.DataFrame([
     ("Pré-lançamento", "D-21", "Teaser: “A Michelin vai ouvir você.”", "Redes", "Externo"),
     ("Pré-lançamento", "D-14", "Revelação da campanha e dos restaurantes", "Redes", "Externo"),
@@ -406,12 +433,20 @@ REGUA = pd.DataFrame([
     ("Pós-circuito", "D+1", "Agradecimento e mapa de selos", "App", "No app"),
     ("Pós-circuito", "D+7", "Resultado final e Críticos da Zona Norte", "App/redes", "No app"),
     ("Pós-circuito", "D+15", "Convite para a próxima edição", "App", "Externo"),
-    ("Pós-circuito", "D+30", "Pesquisa de satisfação e NPS", "App", "No app"),
+    ("Pós-circuito", "D+30", "Pesquisa de satisfação (fora do MVP)", "E-mail", "Externo"),
 ], columns=["Fase", "Quando", "Ação", "Canal", "Neste MVP"])
 
 
+def chave_painel():
+    """Chave do painel: st.secrets['painel_key'], variável PAINEL_KEY ou padrão."""
+    try:
+        return str(st.secrets["painel_key"])
+    except Exception:
+        return os.environ.get("PAINEL_KEY", "voz2026")
+
+
 def painel():
-    st.button("← Voltar ao app", on_click=lambda: ss.update(painel=False))
+    st.button("← Voltar ao app", on_click=lambda: st.query_params.pop("painel", None))
     st.markdown("#### 📊 Painel da campanha")
     st.caption("Modo apresentação. Dados simulados e os gerados por você durante o teste.")
     k = kpis()
@@ -428,12 +463,10 @@ def painel():
             ("Taxa de retorno", f"{k['taxa_retorno']:.0%}", f"{k['voltaram']} de {k['avaliadores']} avaliaram em 2+ dias"),
             ("Taxa de resgate", f"{k['taxa_resgate']:.0%}", f"{k['resgatadas']} de {k['liberadas']} liberadas"),
             ("Compartilhamentos / UGC", f"{k['shares']} / {k['ugc']}", "Compartilhamentos / avaliações com texto"),
-            ("NPS", f"{k['nps']:.0f}", "% promotores − % detratores"),
         ]
-        for nome, val, desc in linhas:
-            st.markdown(card(f"<div style='display:flex;justify-content:space-between'><b>{nome}</b>"
-                             f"<span class='star'>{val}</span></div><span class='muted'>{desc}</span>"),
-                        unsafe_allow_html=True)
+        st.markdown("".join(card(f"<div style='display:flex;justify-content:space-between'><b>{nome}</b>"
+                                 f"<span class='star'>{val}</span></div><span class='muted'>{desc}</span>")
+                            for nome, val, desc in linhas), unsafe_allow_html=True)
     with t2:
         et = pd.Series({"1 Acessos (topo)": k["acessos"], "2 Cadastros (meio)": k["cadastros"],
                         "3 Consumos validados (fundo)": k["consumos"], "4 Avaliações": k["avaliacoes"],
@@ -441,8 +474,7 @@ def painel():
         st.bar_chart(et, horizontal=True)
         st.caption("Funil do PDF: topo (atração) → meio (consideração) → fundo (conversão) → pós (retenção).")
     with t3:
-        fase = cfg()["fase"]
-        st.info(f"Fase atual no app: **{fase}**")
+        st.info(f"Fase atual no app: **{cfg()['fase']}**")
         st.dataframe(REGUA, hide_index=True, width="stretch")
     with t4:
         st.markdown("**Cartão de mesa (QR)**")
@@ -470,11 +502,24 @@ def painel():
             st.rerun()
 
 
-# ------------------------------------------------------------------ main
+# ------------------------------------------------------------------ app
+PAGINAS = {"home": pg_home, "explorar": pg_explorar, "avaliar": pg_avaliar,
+           "selos": pg_selos, "perfil": pg_perfil}
+NAV = {"home": "🏠", "explorar": "🍽️", "avaliar": "📲", "selos": "🏅", "perfil": "👤"}
+
+
+@st.fragment
+def corpo():
+    """Só esta parte roda de novo ao trocar de aba (o resto do script é preservado)."""
+    PAGINAS[ss.pagina](ss.user)
+    with st.container(key="barra"):
+        st.radio("Navegação", list(NAV), format_func=NAV.get, key="pagina", horizontal=True,
+                 label_visibility="collapsed")
+
+
 ss.setdefault("pagina", "home")
 ss.setdefault("sel", None)
 ss.setdefault("user", None)
-ss.setdefault("painel", False)
 ss.setdefault("liked", set())
 ss.setdefault("consumos", set())
 
@@ -487,19 +532,11 @@ if not ss.get("acesso_ok"):
     evento("acesso", ss.user)
     ss.acesso_ok = True
 
-with st.sidebar:
-    st.markdown("**Modo apresentação**")
-    if st.button("📊 Painel da campanha", width="stretch"):
-        ss.painel = True
+st.markdown(f"<style>{css_logos()}</style>", unsafe_allow_html=True)   # logos: enviados 1x por sessão
 
-if ss.painel:
+if qp.get("painel") == chave_painel():              # painel só por link com chave
     painel()
 elif ss.user is None:
     tela_cadastro()
 else:
-    NAV = {"home": "🏠", "explorar": "🍽️", "avaliar": "📲", "selos": "🏅", "perfil": "👤"}
-    {"home": pg_home, "explorar": pg_explorar, "avaliar": pg_avaliar,
-     "selos": pg_selos, "perfil": pg_perfil}[ss.pagina](ss.user)
-    with st.container(key="barra"):
-        st.radio("Navegação", list(NAV), format_func=NAV.get, key="pagina", horizontal=True,
-                 label_visibility="collapsed")
+    corpo()

@@ -2,7 +2,7 @@
 
 REAIS: os 8 restaurantes do Taste (Norte Shopping) e os pratos citados na página
        https://norteshopping.com.br/taste-lab/ (consultada em 12/11/2026).
-SIMULADOS: usuários, avaliações, curtidas, eventos, NPS, resgates, estrelas Michelin,
+SIMULADOS: usuários, avaliações, curtidas, eventos, resgates, estrelas Michelin,
            faixa de preço e alcance. Servem só para demonstrar o conceito.
 
 ESTRELAS MICHELIN: escala DISCRETA de 0 a 3 (inteiros), como no Guia real:
@@ -139,11 +139,8 @@ def main(seed=7):
     ev += [(dia(random.randint(0, 13)), random.choice(handles), "consumo") for _ in range(90)]
     _salvar("eventos.csv", ev, ["data", "usuario", "tipo"])
 
-    # NPS e resgates simulados
+    # resgates simulados
     com_aval = sorted({a[1] for a in avals})
-    _salvar("nps.csv", [(u, random.choice([10, 10, 9, 9, 9, 8, 8, 7, 6, 4]), dia(random.randint(0, 5)))
-                        for u in random.sample(com_aval, min(30, len(com_aval)))],
-            ["usuario", "nota", "data"])
     resg = []
     for u in com_aval:
         n = len({a[2] for a in avals if a[1] == u})
